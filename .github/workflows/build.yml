@@ -23,14 +23,14 @@ jobs:
         with:
           gradle-version: 8.9
 
-      - name: Prepare source
-        id: prep
-        run: | if [ -f orion-src.zip ]; then mkdir -p _build unzip -oq orion-src.zip -d _build echo "dir=_build" >> "$GITHUB_OUTPUT" else echo "dir=." >> "$GITHUB_OUTPUT" fi 
+      - name: Unpack source
+        run: mkdir -p _build && unzip -oq orion-src.zip -d _build
+
       - name: Build debug APK
-        run: gradle -p "${{ steps.prep.outputs.dir }}" assembleDebug --no-daemon --stacktrace
+        run: gradle -p _build assembleDebug --no-daemon --stacktrace
 
       - name: Rename APK
-        run: cp "${{ steps.prep.outputs.dir }}"/app/build/outputs/apk/debug/app-debug.apk OrionFiles.apk
+        run: cp _build/app/build/outputs/apk/debug/app-debug.apk OrionFiles.apk
 
       - uses: actions/upload-artifact@v4
         with:
