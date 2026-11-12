@@ -1,0 +1,35 @@
+
+name: Prepare ORION FILES Project
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract project ZIP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          mkdir -p /tmp/orion-project
+          unzip -o ORION-FILES-Android-Project.zip -d /tmp/orion-project
+          cp -R /tmp/orion-project/orion-files/. .
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+
+      - name: Commit project structure
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || (
+            git commit -m "Extract ORION FILES project"
+            git push
+          )
