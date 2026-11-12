@@ -1,14 +1,16 @@
 package com.orion.files
 
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -22,6 +24,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,11 +35,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,6 +107,15 @@ private fun OrionRoot() {
     var selectedFeature by remember { mutableStateOf<Feature?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    var selectedFolderUri by remember { mutableStateOf<Uri?>(null) }
+    val context = LocalContext.current
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+            selectedFolderUri = uri
+        }
+    }
 
     Scaffold(
         containerColor = Black,
@@ -142,8 +156,7 @@ private fun OrionRoot() {
             AnimatedContent(
                 targetState = Triple(tab, selectedFeature, searchOpen),
                 transitionSpec = {
-                    (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { it / 12 }) togetherWith
-                        (fadeOut(tween(160)) + slideOutHorizontally(tween(180)) { -it / 16 })
+                    fadeIn(tween(120)) togetherWith fadeOut(tween(90))
                 },
                 label = "page-transition"
             ) { state ->
@@ -154,9 +167,9 @@ private fun OrionRoot() {
                         searchOpen = searchOpen,
                         query = query,
                         onQuery = { query = it },
-                        onFeature = { selectedFeature = it }
+                        onFeature = { feature -> if (feature.title == "All Files") tab = 1 else selectedFeature = feature }
                     )
-                    state.first == 1 -> FeatureList("My Files", "Browse your device storage", features.take(5), onFeature = { selectedFeature = it })
+                    state.first == 1 -> FileBrowserScreen(selectedFolderUri, onPickFolder = { folderPicker.launch(null) })
                     state.first == 2 -> FeatureList("Smart Tools", "Useful tools in one place", features.drop(4), onFeature = { selectedFeature = it })
                     else -> SettingsScreen()
                 }
@@ -229,7 +242,7 @@ private fun HomeScreen(
 @Composable
 private fun StorageCard() {
     Card(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
@@ -238,7 +251,7 @@ private fun StorageCard() {
             // Soft blurred accent glow behind the translucent glass panel.
             Box(
                 Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 8.dp)
-                    .size(82.dp).blur(26.dp)
+                    .size(54.dp)
                     .background(Brush.radialGradient(listOf(Violet.copy(alpha = 0.55f), Color.Transparent)), CircleShape)
             )
             Column {
@@ -267,12 +280,9 @@ private fun StorageCard() {
 
 @Composable
 private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, tween(140, easing = FastOutSlowInEasing), label = "card-press")
     Card(
         modifier = Modifier.fillMaxWidth().height(112.dp)
-            .animateContentSize()
-            .clickable { pressed = true; onClick() },
+            .clickable { onClick() },
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
         elevation = CardDefaults.cardElevation(0.dp)
@@ -292,6 +302,71 @@ private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
                 Text(feature.title, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Text(feature.subtitle, color = TextMuted, fontSize = 9.sp, lineHeight = 12.sp)
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun FileBrowserScreen(rootUri: Uri?, onPickFolder: () -> Unit) {
+    val context = LocalContext.current
+    var currentFolder by remember(rootUri) {
+        mutableStateOf(rootUri?.let { DocumentFile.fromTreeUri(context, it) })
+    }
+    var entries by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
+    LaunchedEffect(currentFolder) {
+        entries = currentFolder?.listFiles()
+            ?.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name?.lowercase() ?: "" })
+            ?: emptyList()
+    }
+    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("My Files", color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                Text(currentFolder?.name ?: "Choose a folder to get started", color = TextMuted, fontSize = 11.sp)
+            }
+            if (rootUri != null) TextButton(onClick = onPickFolder) { Text("Change", color = Blue) }
+        }
+        Spacer(Modifier.height(14.dp))
+        if (rootUri == null || currentFolder == null) {
+            Card(colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(20.dp)) {
+                Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Blue, modifier = Modifier.size(42.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("Grant folder access", color = TextMain, fontWeight = FontWeight.Bold)
+                    Text("ORION only accesses the folder you select. Your files stay on this device.", color = TextMuted, fontSize = 11.sp)
+                    Spacer(Modifier.height(14.dp))
+                    Button(onClick = onPickFolder) { Text("Choose Folder") }
+                }
+            }
+        } else {
+            if (currentFolder?.uri != rootUri) TextButton(onClick = { currentFolder = currentFolder?.parentFile ?: DocumentFile.fromTreeUri(context, rootUri) }) { Text("← Back", color = Blue) }
+            if (entries.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("This folder is empty", color = TextMuted) }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
+                    items(entries, key = { it.uri.toString() }) { file ->
+                        Card(modifier = Modifier.fillMaxWidth().clickable {
+                            if (file.isDirectory) currentFolder = file
+                            else {
+                                val mime = context.contentResolver.getType(file.uri) ?: "*/*"
+                                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                runCatching { context.startActivity(intent) }
+                            }
+                        }, colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(15.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, contentDescription = null, tint = if (file.isDirectory) Blue else Violet)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(file.name ?: "Unnamed", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                                    Text(if (file.isDirectory) "Folder" else android.text.format.Formatter.formatShortFileSize(context, file.length()), color = TextMuted, fontSize = 10.sp)
+                                }
+                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
