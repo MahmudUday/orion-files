@@ -184,34 +184,17 @@ private fun OrionRoot() {
             Modifier.fillMaxSize().padding(padding)
                 .background(Black)
         ) {
-            AnimatedContent(
-                targetState = Triple(tab, selectedFeature, searchOpen),
-                transitionSpec = {
-                    (fadeIn(tween(170)) + slideInHorizontally(tween(170)) { it / 14 }) togetherWith
-                        (fadeOut(tween(110)) + slideOutHorizontally(tween(110)) { -it / 18 })
-                },
-                label = "page-transition"
-            ) { state ->
-                when {
-                    state.second != null -> FeatureDetail(state.second!!)
-                    state.first == 0 -> HomeScreen(
-                        onSearch = { searchOpen = !searchOpen },
-                        searchOpen = searchOpen,
-                        query = query,
-                        onQuery = { query = it },
-                        onFeature = { feature -> if (feature.title == "All Files") tab = 1 else selectedFeature = feature }
-                    )
-                    state.first == 1 -> FileBrowserScreen(hasAllFilesAccess, selectedFolderUri, onRequestAllFiles = {
-                        if (Build.VERSION.SDK_INT >= 30) {
-                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))
-                            runCatching { allFilesSettings.launch(intent) }.onFailure {
-                                allFilesSettings.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                            }
-                        }
-                    }, onPickFolder = { folderPicker.launch(null) }, onOpenMedia = { openedMedia = it })
-                    state.first == 2 -> FeatureList("Smart Tools", "Useful tools in one place", features.drop(4), onFeature = { selectedFeature = it })
-                    else -> SettingsScreen()
-                }
+            when {
+                selectedFeature != null -> FeatureDetail(selectedFeature!!)
+                tab == 0 -> HomeScreen(onSearch = { searchOpen = !searchOpen }, searchOpen = searchOpen, query = query, onQuery = { query = it }, onFeature = { feature -> if (feature.title == "All Files") tab = 1 else selectedFeature = feature })
+                tab == 1 -> FileBrowserScreen(hasAllFilesAccess, selectedFolderUri, onRequestAllFiles = {
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))
+                        runCatching { allFilesSettings.launch(intent) }.onFailure { allFilesSettings.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+                    }
+                }, onPickFolder = { folderPicker.launch(null) }, onOpenMedia = { openedMedia = it })
+                tab == 2 -> FeatureList("Smart Tools", "Useful tools in one place", features.drop(4), onFeature = { selectedFeature = it })
+                else -> SettingsScreen()
             }
         }
     }
@@ -265,43 +248,50 @@ private fun HomeScreen(
 
 @Composable
 private fun StorageCard() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0x663D7EFF), Color(0x553F216E), Color(0x33101828)))).padding(18.dp)) {
-            // Soft blurred accent glow behind the translucent glass panel.
-            Box(
-                Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 8.dp)
-                    .size(34.dp)
-                    .background(Violet.copy(alpha = 0.20f), CircleShape)
-            )
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.DonutLarge, contentDescription = null, tint = Blue)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Device Storage", color = TextMain, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.weight(1f))
-                    Text("Overview", color = Violet, fontSize = 11.sp)
-                }
-                Spacer(Modifier.height(18.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text("--", color = TextMain, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                    Text("  Storage scan not connected yet", color = TextMuted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 6.dp))
+    var refresh by remember { mutableIntStateOf(0) }
+    var total by remember { mutableLongStateOf(0L) }
+    var free by remember { mutableLongStateOf(0L) }
+    var loaded by remember { mutableStateOf(false) }
+    LaunchedEffect(refresh) {
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val stat = StatFs(Environment.getExternalStorageDirectory().absolutePath)
+                stat.totalBytes to stat.availableBytes
+            }.getOrNull()
+        }
+        if (result != null) { total = result.first; free = result.second; loaded = true }
+    }
+    val context = LocalContext.current
+    val used = (total - free).coerceAtLeast(0L)
+    val ratio = if (total > 0L) (used.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = SurfaceGlass), elevation = CardDefaults.cardElevation(0.dp)) {
+        Column(Modifier.fillMaxWidth().padding(17.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.DonutLarge, null, tint = Blue)
+                Spacer(Modifier.width(8.dp))
+                Text("Device Storage", color = TextMain, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { refresh++ }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Refresh, "Refresh storage", tint = Violet) }
+            }
+            if (!loaded) {
+                LinearProgressIndicator(Modifier.fillMaxWidth(), color = Blue, trackColor = Color(0xFF252B3B))
+                Text("Reading device storage…", color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+            } else {
+                Text("${android.text.format.Formatter.formatShortFileSize(context, used)} used", color = TextMain, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(11.dp))
+                Box(Modifier.fillMaxWidth().height(9.dp).clip(CircleShape).background(Color(0xFF252B3B))) {
+                    Box(Modifier.fillMaxWidth(ratio).fillMaxHeight().clip(CircleShape).background(Brush.horizontalGradient(listOf(Blue, Violet))))
                 }
                 Spacer(Modifier.height(12.dp))
-                Box(Modifier.fillMaxWidth().height(7.dp).clip(CircleShape).background(Color(0xFF252B3B))) {
-                    Box(Modifier.fillMaxWidth(0.42f).fillMaxHeight().clip(CircleShape).background(Brush.horizontalGradient(listOf(Blue, Violet))).alpha(0.9f))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column { Text("USED", color = TextMuted, fontSize = 9.sp); Text(android.text.format.Formatter.formatShortFileSize(context, used), color = Blue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                    Column(horizontalAlignment = Alignment.End) { Text("FREE", color = TextMuted, fontSize = 9.sp); Text(android.text.format.Formatter.formatShortFileSize(context, free), color = Color(0xFF36D6A0), fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                    Column(horizontalAlignment = Alignment.End) { Text("TOTAL", color = TextMuted, fontSize = 9.sp); Text(android.text.format.Formatter.formatShortFileSize(context, total), color = Violet, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                 }
-                Spacer(Modifier.height(8.dp))
-                Text("Storage information will appear after file access is implemented.", color = TextMuted, fontSize = 10.sp)
             }
         }
     }
 }
-
 @Composable
 private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
     Card(
@@ -509,14 +499,19 @@ private fun FileBrowserScreen(
 
 @Composable
 private fun FeatureList(title: String, subtitle: String, list: List<Feature>, onFeature: (Feature) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(18.dp)) {
-        Text(title, color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-        Text(subtitle, color = TextMuted, fontSize = 12.sp)
+    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth().widthIn(max = 500.dp)) {
+            Text(title, color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+            Text(subtitle, color = TextMuted, fontSize = 12.sp)
+        }
         Spacer(Modifier.height(18.dp))
-        list.forEach { FeatureCard(it) { onFeature(it) }; Spacer(Modifier.height(10.dp)) }
+        LazyColumn(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 22.dp)) {
+            items(list, key = { it.title }) { feature ->
+                Box(Modifier.fillMaxWidth().widthIn(max = 500.dp), contentAlignment = Alignment.Center) { FeatureCard(feature) { onFeature(feature) } }
+            }
+        }
     }
 }
-
 @Composable
 private fun FeatureDetail(feature: Feature) {
     val context = LocalContext.current
@@ -533,7 +528,8 @@ private fun FeatureDetail(feature: Feature) {
             Triple(stat.totalBytes, stat.totalBytes - stat.availableBytes, stat.availableBytes)
         }.getOrNull()
     }
-    Column(Modifier.fillMaxSize().padding(18.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth().widthIn(max = 500.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(feature.title, color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.Bold)
@@ -651,6 +647,7 @@ private fun FeatureDetail(feature: Feature) {
             "Secure Vault" -> Text("Encrypted vault is not enabled yet. I won't store private files without proper encryption and recovery handling.", color = TextMuted, fontSize = 12.sp)
             "QR Tools" -> Text("QR scan and generation require camera and QR engine integration; this module is not enabled yet.", color = TextMuted, fontSize = 12.sp)
             else -> Text("This tool is not available yet.", color = TextMuted)
+        }
         }
     }
 }
