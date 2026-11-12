@@ -1,6 +1,7 @@
 package com.orion.files
 
 import android.os.Bundle
+import android.os.StatFs
 import android.os.Environment
 import android.provider.Settings
 import android.os.Build
@@ -24,6 +25,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -36,10 +39,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -48,6 +53,9 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.core.content.FileProvider
 
 private val Black = Color(0xFF030407)
 private val SurfaceGlass = Color(0xB8171B2B)
@@ -164,7 +172,8 @@ private fun OrionRoot() {
             AnimatedContent(
                 targetState = Triple(tab, selectedFeature, searchOpen),
                 transitionSpec = {
-                    fadeIn(tween(120)) togetherWith fadeOut(tween(90))
+                    (fadeIn(tween(170)) + slideInHorizontally(tween(170)) { it / 14 }) togetherWith
+                        (fadeOut(tween(110)) + slideOutHorizontally(tween(110)) { -it / 18 })
                 },
                 label = "page-transition"
             ) { state ->
@@ -262,12 +271,12 @@ private fun StorageCard() {
         colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0x443D7EFF), Color(0x332A1C50), Color(0x22101828)))).padding(18.dp)) {
+        Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0x663D7EFF), Color(0x553F216E), Color(0x33101828)))).padding(18.dp)) {
             // Soft blurred accent glow behind the translucent glass panel.
             Box(
                 Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 8.dp)
-                    .size(54.dp)
-                    .background(Brush.radialGradient(listOf(Violet.copy(alpha = 0.55f), Color.Transparent)), CircleShape)
+                    .size(34.dp)
+                    .background(Violet.copy(alpha = 0.20f), CircleShape)
             )
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -297,6 +306,7 @@ private fun StorageCard() {
 private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().height(112.dp)
+            .animateContentSize(animationSpec = tween(160))
             .clickable { onClick() },
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
@@ -335,70 +345,164 @@ private fun FileBrowserScreen(
         mutableStateOf<File?>(if (hasAllFilesAccess) Environment.getExternalStorageDirectory() else null)
     }
     var entries by remember { mutableStateOf<List<File>>(emptyList()) }
-    LaunchedEffect(currentFolder, hasAllFilesAccess) {
-        entries = if (hasAllFilesAccess) {
-            currentFolder?.listFiles()?.filter { it.exists() }
-                ?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
-                ?: emptyList()
-        } else emptyList()
+    var query by remember { mutableStateOf("") }
+    var sortByName by remember { mutableStateOf(true) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+    var selectedFile by remember { mutableStateOf<File?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var showRename by remember { mutableStateOf(false) }
+    var showDelete by remember { mutableStateOf(false) }
+    var clipboardFile by remember { mutableStateOf<File?>(null) }
+    var cutMode by remember { mutableStateOf(false) }
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var newFolderName by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(currentFolder, hasAllFilesAccess, refreshKey, query, sortByName) {
+        loading = true
+        entries = withContext(Dispatchers.IO) {
+            runCatching {
+                currentFolder?.listFiles()?.asSequence()
+                    ?.filter { it.exists() && it.name.contains(query, ignoreCase = true) }
+                    ?.sortedWith(
+                        if (sortByName) compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() }
+                        else compareByDescending<File> { it.isDirectory }.thenByDescending { it.lastModified() }
+                    )?.toList() ?: emptyList()
+            }.getOrDefault(emptyList())
+        }
+        loading = false
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("My Files", color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                Text("My Files", color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text(currentFolder?.absolutePath ?: "Internal storage", color = TextMuted, fontSize = 10.sp, maxLines = 1)
             }
             TextButton(onClick = onPickFolder) { Text("Folder", color = Blue) }
+            TextButton(onClick = { showCreateFolder = true }, enabled = hasAllFilesAccess) { Text("+ Folder", color = Violet) }
         }
-        Spacer(Modifier.height(12.dp))
+        if (hasAllFilesAccess) {
+            OutlinedTextField(
+                value = query, onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                placeholder = { Text("Search in this folder…", color = TextMuted) },
+                singleLine = true, shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue, unfocusedBorderColor = BorderGlow, focusedTextColor = TextMain, unfocusedTextColor = TextMain)
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    val parent = currentFolder?.parentFile
+                    currentFolder = if (parent != null && parent.canRead()) parent else Environment.getExternalStorageDirectory()
+                }) { Text("↑ Up", color = Blue) }
+                TextButton(onClick = { sortByName = !sortByName }) { Text(if (sortByName) "Sort: Name" else "Sort: Recent", color = Violet) }
+                Spacer(Modifier.weight(1f))
+                if (clipboardFile != null) {
+                    TextButton(onClick = {
+                        val source = clipboardFile
+                        val target = source?.let { File(currentFolder, it.name) }
+                        if (source != null && target != null) {
+                            loading = true
+                            kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                                runCatching { source.copyRecursively(target, overwrite = true); if (cutMode) source.deleteRecursively() }
+                                withContext(Dispatchers.Main) { clipboardFile = null; cutMode = false; refreshKey++ }
+                            }
+                        }
+                    }) { Text(if (cutMode) "Move here" else "Paste", color = Blue) }
+                }
+            }
+        }
         if (!hasAllFilesAccess) {
             Card(colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(20.dp)) {
                 Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Blue, modifier = Modifier.size(42.dp))
                     Spacer(Modifier.height(10.dp))
                     Text("Allow full internal storage access", color = TextMain, fontWeight = FontWeight.Bold)
-                    Text("For personal use, enable All files access in Android Settings. ORION will then browse your shared internal storage from its root folder.", color = TextMuted, fontSize = 11.sp)
+                    Text("Enable All files access in Android Settings to browse internal storage from its root.", color = TextMuted, fontSize = 11.sp)
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = onRequestAllFiles) { Text("Grant Full Storage Access") }
                     TextButton(onClick = onPickFolder) { Text("Or choose one folder", color = Violet) }
                 }
             }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
-                    val parent = currentFolder?.parentFile
-                    currentFolder = if (parent != null && parent.canRead()) parent else Environment.getExternalStorageDirectory()
-                }) { Text("↑ Up", color = Blue) }
-                Text("Internal storage", color = TextMuted, fontSize = 11.sp)
+        } else if (loading) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Blue)
             }
-            if (entries.isEmpty()) {
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Text("No files here, or this folder is restricted", color = TextMuted)
-                }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-                    items(entries, key = { it.absolutePath }) { file ->
-                        Card(modifier = Modifier.fillMaxWidth().clickable {
-                            if (file.isDirectory) {
-                                if (file.canRead()) currentFolder = file
-                            } else {
-                                android.widget.Toast.makeText(context, "File: ${file.name}", android.widget.Toast.LENGTH_SHORT).show()
+        } else if (entries.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No files found in this folder", color = TextMuted)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 20.dp)
+            ) {
+                items(entries, key = { it.absolutePath }) { file ->
+                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(14.dp)) {
+                        Row(Modifier.fillMaxWidth().clickable {
+                            if (file.isDirectory) currentFolder = file else {
+                                runCatching {
+                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                    val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+                                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                                }.onFailure { android.widget.Toast.makeText(context, "No app found to open this file", android.widget.Toast.LENGTH_SHORT).show() }
                             }
-                        }, colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(15.dp)) {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, contentDescription = null, tint = if (file.isDirectory) Blue else Violet)
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(file.name, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                                    Text(if (file.isDirectory) "Folder" else android.text.format.Formatter.formatShortFileSize(context, file.length()), color = TextMuted, fontSize = 10.sp)
+                        }.padding(start = 13.dp, end = 5.dp, top = 11.dp, bottom = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, contentDescription = null, tint = if (file.isDirectory) Blue else Violet)
+                            Spacer(Modifier.width(11.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(file.name, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                                Text(if (file.isDirectory) "Folder" else android.text.format.Formatter.formatShortFileSize(context, file.length()), color = TextMuted, fontSize = 10.sp)
+                            }
+                            var menuOpen by remember(file.absolutePath) { mutableStateOf(false) }
+                            Box {
+                                IconButton(onClick = { selectedFile = file; menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "File actions", tint = TextMuted) }
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; selectedFile = file; renameText = file.name; showRename = true })
+                                    DropdownMenuItem(text = { Text("Copy") }, onClick = { menuOpen = false; clipboardFile = file; cutMode = false })
+                                    DropdownMenuItem(text = { Text("Cut / Move") }, onClick = { menuOpen = false; clipboardFile = file; cutMode = true })
+                                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; selectedFile = file; showDelete = true })
                                 }
-                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showRename && selectedFile != null) {
+        AlertDialog(onDismissRequest = { showRename = false }, title = { Text("Rename file") },
+            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+            confirmButton = { TextButton(onClick = {
+                val file = selectedFile
+                if (file != null && renameText.isNotBlank()) {
+                    val target = File(file.parentFile, renameText.trim())
+                    if (target.exists()) android.widget.Toast.makeText(context, "A file with this name already exists", android.widget.Toast.LENGTH_SHORT).show()
+                    else if (file.renameTo(target)) refreshKey++
+                }
+                showRename = false
+            }) { Text("Rename") } },
+            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } })
+    }
+    if (showDelete && selectedFile != null) {
+        AlertDialog(onDismissRequest = { showDelete = false }, title = { Text("Delete permanently?") },
+            text = { Text(selectedFile?.name ?: "") },
+            confirmButton = { TextButton(onClick = {
+                selectedFile?.let { file -> if (file.isDirectory) file.deleteRecursively() else file.delete() }
+                refreshKey++; showDelete = false
+            }) { Text("Delete", color = Color(0xFFFF5B70)) } },
+            dismissButton = { TextButton(onClick = { showDelete = false }) { Text("Cancel") } })
+    }
+    if (showCreateFolder) {
+        AlertDialog(onDismissRequest = { showCreateFolder = false }, title = { Text("New folder") },
+            text = { OutlinedTextField(value = newFolderName, onValueChange = { newFolderName = it }, singleLine = true, placeholder = { Text("Folder name") }) },
+            confirmButton = { TextButton(onClick = {
+                if (newFolderName.isNotBlank()) File(currentFolder, newFolderName.trim()).mkdirs()
+                newFolderName = ""; refreshKey++; showCreateFolder = false
+            }) { Text("Create") } },
+            dismissButton = { TextButton(onClick = { showCreateFolder = false }) { Text("Cancel") } })
     }
 }
 
