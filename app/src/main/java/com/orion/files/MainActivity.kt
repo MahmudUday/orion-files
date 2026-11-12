@@ -1,6 +1,10 @@
 package com.orion.files
 
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
+import android.os.Build
+import java.io.File
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.ComponentActivity
@@ -108,6 +112,10 @@ private fun OrionRoot() {
     var searchOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var selectedFolderUri by remember { mutableStateOf<Uri?>(null) }
+    var hasAllFilesAccess by remember { mutableStateOf(Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()) }
+    val allFilesSettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        hasAllFilesAccess = Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
+    }
     val context = LocalContext.current
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -169,7 +177,14 @@ private fun OrionRoot() {
                         onQuery = { query = it },
                         onFeature = { feature -> if (feature.title == "All Files") tab = 1 else selectedFeature = feature }
                     )
-                    state.first == 1 -> FileBrowserScreen(selectedFolderUri, onPickFolder = { folderPicker.launch(null) })
+                    state.first == 1 -> FileBrowserScreen(hasAllFilesAccess, selectedFolderUri, onRequestAllFiles = {
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))
+                            runCatching { allFilesSettings.launch(intent) }.onFailure {
+                                allFilesSettings.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                            }
+                        }
+                    }, onPickFolder = { folderPicker.launch(null) })
                     state.first == 2 -> FeatureList("Smart Tools", "Useful tools in one place", features.drop(4), onFeature = { selectedFeature = it })
                     else -> SettingsScreen()
                 }
@@ -309,57 +324,72 @@ private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
 
 
 @Composable
-private fun FileBrowserScreen(rootUri: Uri?, onPickFolder: () -> Unit) {
+private fun FileBrowserScreen(
+    hasAllFilesAccess: Boolean,
+    rootUri: Uri?,
+    onRequestAllFiles: () -> Unit,
+    onPickFolder: () -> Unit
+) {
     val context = LocalContext.current
-    var currentFolder by remember(rootUri) {
-        mutableStateOf(rootUri?.let { DocumentFile.fromTreeUri(context, it) })
+    var currentFolder by remember(hasAllFilesAccess, rootUri) {
+        mutableStateOf<File?>(if (hasAllFilesAccess) Environment.getExternalStorageDirectory() else null)
     }
-    var entries by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
-    LaunchedEffect(currentFolder) {
-        entries = currentFolder?.listFiles()
-            ?.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name?.lowercase() ?: "" })
-            ?: emptyList()
+    var entries by remember { mutableStateOf<List<File>>(emptyList()) }
+    LaunchedEffect(currentFolder, hasAllFilesAccess) {
+        entries = if (hasAllFilesAccess) {
+            currentFolder?.listFiles()?.filter { it.exists() }
+                ?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
+                ?: emptyList()
+        } else emptyList()
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("My Files", color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                Text(currentFolder?.name ?: "Choose a folder to get started", color = TextMuted, fontSize = 11.sp)
+                Text(currentFolder?.absolutePath ?: "Internal storage", color = TextMuted, fontSize = 10.sp, maxLines = 1)
             }
-            if (rootUri != null) TextButton(onClick = onPickFolder) { Text("Change", color = Blue) }
+            TextButton(onClick = onPickFolder) { Text("Folder", color = Blue) }
         }
-        Spacer(Modifier.height(14.dp))
-        if (rootUri == null || currentFolder == null) {
+        Spacer(Modifier.height(12.dp))
+        if (!hasAllFilesAccess) {
             Card(colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(20.dp)) {
-                Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Blue, modifier = Modifier.size(42.dp))
+                    Spacer(Modifier.height(10.dp))
+                    Text("Allow full internal storage access", color = TextMain, fontWeight = FontWeight.Bold)
+                    Text("For personal use, enable All files access in Android Settings. ORION will then browse your shared internal storage from its root folder.", color = TextMuted, fontSize = 11.sp)
                     Spacer(Modifier.height(12.dp))
-                    Text("Grant folder access", color = TextMain, fontWeight = FontWeight.Bold)
-                    Text("ORION only accesses the folder you select. Your files stay on this device.", color = TextMuted, fontSize = 11.sp)
-                    Spacer(Modifier.height(14.dp))
-                    Button(onClick = onPickFolder) { Text("Choose Folder") }
+                    Button(onClick = onRequestAllFiles) { Text("Grant Full Storage Access") }
+                    TextButton(onClick = onPickFolder) { Text("Or choose one folder", color = Violet) }
                 }
             }
         } else {
-            if (currentFolder?.uri != rootUri) TextButton(onClick = { currentFolder = currentFolder?.parentFile ?: DocumentFile.fromTreeUri(context, rootUri) }) { Text("← Back", color = Blue) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    val parent = currentFolder?.parentFile
+                    currentFolder = if (parent != null && parent.canRead()) parent else Environment.getExternalStorageDirectory()
+                }) { Text("↑ Up", color = Blue) }
+                Text("Internal storage", color = TextMuted, fontSize = 11.sp)
+            }
             if (entries.isEmpty()) {
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("This folder is empty", color = TextMuted) }
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("No files here, or this folder is restricted", color = TextMuted)
+                }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-                    items(entries, key = { it.uri.toString() }) { file ->
+                    items(entries, key = { it.absolutePath }) { file ->
                         Card(modifier = Modifier.fillMaxWidth().clickable {
-                            if (file.isDirectory) currentFolder = file
-                            else {
-                                val mime = context.contentResolver.getType(file.uri) ?: "*/*"
-                                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                runCatching { context.startActivity(intent) }
+                            if (file.isDirectory) {
+                                if (file.canRead()) currentFolder = file
+                            } else {
+                                android.widget.Toast.makeText(context, "File: ${file.name}", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }, colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(15.dp)) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, contentDescription = null, tint = if (file.isDirectory) Blue else Violet)
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(file.name ?: "Unnamed", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                                    Text(file.name, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                                     Text(if (file.isDirectory) "Folder" else android.text.format.Formatter.formatShortFileSize(context, file.length()), color = TextMuted, fontSize = 10.sp)
                                 }
                                 Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
