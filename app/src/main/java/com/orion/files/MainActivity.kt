@@ -516,17 +516,148 @@ private fun FeatureList(title: String, subtitle: String, list: List<Feature>, on
 
 @Composable
 private fun FeatureDetail(feature: Feature) {
-    Column(Modifier.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(82.dp).clip(RoundedCornerShape(26.dp)).background(feature.tint.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
-            Icon(feature.icon, contentDescription = null, tint = feature.tint, modifier = Modifier.size(38.dp))
+    val context = LocalContext.current
+    val root = remember { Environment.getExternalStorageDirectory() }
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<List<File>>(emptyList()) }
+    var message by remember { mutableStateOf("") }
+    var sourcePath by remember { mutableStateOf("") }
+    var destinationPath by remember { mutableStateOf("") }
+    val storage = remember {
+        runCatching {
+            val stat = android.os.StatFs(root.absolutePath)
+            Triple(stat.totalBytes, stat.totalBytes - stat.availableBytes, stat.availableBytes)
+        }.getOrNull()
+    }
+    Column(Modifier.fillMaxSize().padding(18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(feature.title, color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text(feature.subtitle, color = TextMuted, fontSize = 11.sp)
+            }
+            Icon(feature.icon, contentDescription = null, tint = feature.tint, modifier = Modifier.size(30.dp))
         }
-        Spacer(Modifier.height(20.dp))
-        Text(feature.title, color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Text("This module is planned for the ORION FILES feature build.", color = TextMuted, fontSize = 13.sp)
-        Spacer(Modifier.height(18.dp))
-        Surface(color = Color(0x332F70E8), shape = RoundedCornerShape(50.dp)) {
-            Text("COMING IN FEATURE RELEASE", color = Blue, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
+        Spacer(Modifier.height(16.dp))
+        when (feature.title) {
+            "Storage" -> {
+                if (storage == null) Text("Storage information unavailable.", color = TextMuted)
+                else {
+                    StorageMetric("Total", android.text.format.Formatter.formatFileSize(context, storage.first), Blue)
+                    StorageMetric("Used", android.text.format.Formatter.formatFileSize(context, storage.second), Violet)
+                    StorageMetric("Free", android.text.format.Formatter.formatFileSize(context, storage.third), Color(0xFF36D6A0))
+                    LinearProgressIndicator(progress = { storage.second.toFloat() / storage.first.coerceAtLeast(1L) }, modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape), color = Blue, trackColor = Color(0xFF273044))
+                }
+            }
+            "ZIP Tools" -> {
+                Text("Enter a file/folder path and output path. Example: /storage/emulated/0/Download", color = TextMuted, fontSize = 11.sp)
+                OutlinedTextField(value = sourcePath, onValueChange = { sourcePath = it }, label = { Text("Source path / ZIP path") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = destinationPath, onValueChange = { destinationPath = it }, label = { Text("Output path / Extract folder") }, modifier = Modifier.fillMaxWidth())
+                Button(enabled = !busy && sourcePath.isNotBlank() && destinationPath.isNotBlank(), onClick = {
+                    busy = true
+                    scope.launch {
+                        message = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val source = File(sourcePath.trim())
+                                val dest = File(destinationPath.trim())
+                                require(source.exists()) { "Source path does not exist" }
+                                if (source.extension.equals("zip", true) && source.isFile) {
+                                    dest.mkdirs()
+                                    ZipInputStream(source.inputStream().buffered()).use { zis ->
+                                        var entry = zis.nextEntry
+                                        while (entry != null) {
+                                            val out = File(dest, entry.name).canonicalFile
+                                            require(out.path.startsWith(dest.canonicalPath + File.separator)) { "Unsafe archive entry" }
+                                            if (entry.isDirectory) out.mkdirs() else {
+                                                out.parentFile?.mkdirs()
+                                                out.outputStream().buffered().use { zis.copyTo(it) }
+                                            }
+                                            zis.closeEntry()
+                                            entry = zis.nextEntry
+                                        }
+                                    }
+                                    "Extracted to ${dest.absolutePath}"
+                                } else {
+                                    val archive = if (dest.isDirectory) File(dest, source.name + ".zip") else dest
+                                    archive.parentFile?.mkdirs()
+                                    ZipOutputStream(archive.outputStream().buffered()).use { zos ->
+                                        val base = if (source.isDirectory) source else source.parentFile ?: source
+                                        val list = if (source.isDirectory) source.walkTopDown().filter { it.isFile }.take(10000).toList() else listOf(source)
+                                        list.forEach { file ->
+                                            val name = if (source.isDirectory) file.relativeTo(base).invariantSeparatorsPath else file.name
+                                            zos.putNextEntry(ZipEntry(name))
+                                            file.inputStream().buffered().use { it.copyTo(zos) }
+                                            zos.closeEntry()
+                                        }
+                                    }
+                                    "ZIP created: ${archive.absolutePath}"
+                                }
+                            }.getOrElse { "Operation failed: ${it.message}" }
+                        }
+                        busy = false
+                    }
+                }) { Text(if (busy) "Working…" else "Create ZIP / Extract ZIP") }
+                Text("Tip: To extract, set the source path to a .zip file. To create, set it to a file or folder.", color = TextMuted, fontSize = 10.sp)
+            }
+            "Duplicates", "Large Files" -> {
+                Text(if (feature.title == "Duplicates") "Find exact duplicate files by SHA-256." else "Find files larger than 50 MB.", color = TextMuted, fontSize = 12.sp)
+                Button(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val found = withContext(Dispatchers.IO) {
+                            val all = root.walkTopDown().onEnter { !it.absolutePath.contains("/Android/") }.filter { it.isFile }.take(15000).toList()
+                            if (feature.title == "Large Files") all.filter { it.length() >= 50L * 1024 * 1024 }.sortedByDescending { it.length() }.take(150)
+                            else {
+                                val hashes = all.filter { it.length() > 0 }.groupBy { file ->
+                                    runCatching {
+                                        val digest = java.security.MessageDigest.getInstance("SHA-256")
+                                        file.inputStream().buffered().use { input ->
+                                            val buffer = ByteArray(64 * 1024)
+                                            while (true) { val n = input.read(buffer); if (n <= 0) break; digest.update(buffer, 0, n) }
+                                        }
+                                        "${file.length()}:" + digest.digest().joinToString("") { "%02x".format(it) }
+                                    }.getOrDefault("error:${file.absolutePath}")
+                                }
+                                hashes.values.filter { it.size > 1 }.flatten().take(200)
+                            }
+                        }
+                        results = found
+                        message = "Scan complete • ${found.size} result(s)"
+                        busy = false
+                    }
+                }) { Text(if (busy) "Scanning storage…" else "Start Scan") }
+                if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Blue)
+                Text(message, color = Violet, fontSize = 11.sp, modifier = Modifier.padding(vertical = 8.dp))
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(results, key = { it.absolutePath }) { file ->
+                        Card(colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(12.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.InsertDriveFile, null, tint = feature.tint)
+                                Spacer(Modifier.width(9.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(file.name, color = TextMain, maxLines = 1)
+                                    Text(file.parent ?: "", color = TextMuted, fontSize = 9.sp, maxLines = 1)
+                                }
+                                Text(android.text.format.Formatter.formatShortFileSize(context, file.length()), color = Violet, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+            }
+            "PDF Tools" -> Text("PDF viewer, image-to-PDF, merge and split are being implemented as a separate module. No fake actions are shown here.", color = TextMuted, fontSize = 12.sp)
+            "Secure Vault" -> Text("Encrypted vault is not enabled yet. I won't store private files without proper encryption and recovery handling.", color = TextMuted, fontSize = 12.sp)
+            "QR Tools" -> Text("QR scan and generation require camera and QR engine integration; this module is not enabled yet.", color = TextMuted, fontSize = 12.sp)
+            else -> Text("This tool is not available yet.", color = TextMuted)
+        }
+    }
+}
+
+@Composable
+private fun StorageMetric(label: String, value: String, tint: Color) {
+    Card(Modifier.fillMaxWidth().padding(bottom = 9.dp), colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(16.dp)) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = TextMuted, modifier = Modifier.weight(1f))
+            Text(value, color = tint, fontWeight = FontWeight.Bold)
         }
     }
 }
