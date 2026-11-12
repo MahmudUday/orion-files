@@ -71,6 +71,7 @@ import java.util.zip.ZipOutputStream
 import java.util.zip.ZipInputStream
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.asImageBitmap
 import android.widget.ImageView
 import android.widget.VideoView
 import android.widget.MediaController
@@ -218,42 +219,48 @@ private fun HomeScreen(
     onQuery: (String) -> Unit,
     onFeature: (Feature) -> Unit
 ) {
-    val visibleFeatures = remember(query) { features.filter { it.title.contains(query, true) || query.isBlank() } }
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)
+    val visibleFeatures = remember(query) { features.filter { it.title.contains(query, true) || it.subtitle.contains(query, true) || query.isBlank() } }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+        item(key = "header", contentType = "header") {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text("ORION", color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
-                    Text("FILES  •  ALL YOUR FILES. ONE PLACE.", color = TextMuted, fontSize = 9.sp, letterSpacing = 1.sp)
+                    Text("ORION", color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.6.sp)
+                    Text("FILES  •  ALL YOUR FILES. ONE PLACE.", color = TextMuted, fontSize = 9.sp, letterSpacing = 0.7.sp)
                 }
-                IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Search", tint = TextMain) }
-                Box(Modifier.size(40.dp).clip(CircleShape).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Bolt, contentDescription = null, tint = Color.White)
+                IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search", tint = TextMain) }
+                Box(Modifier.size(38.dp).clip(CircleShape).background(Blue), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Bolt, null, tint = Color.White)
                 }
             }
         }
-        if (searchOpen) item(span = { GridItemSpan(maxLineSpan) }) {
-            OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth(),
+        if (searchOpen) item(key = "search", contentType = "search") {
+            OutlinedTextField(
+                value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("Search files and tools…", color = TextMuted) }, singleLine = true,
-                shape = RoundedCornerShape(14.dp), colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Blue, unfocusedBorderColor = BorderGlow,
-                    focusedTextColor = TextMain, unfocusedTextColor = TextMain))
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue, unfocusedBorderColor = BorderGlow, focusedTextColor = TextMain, unfocusedTextColor = TextMain)
+            )
         }
-        item(span = { GridItemSpan(maxLineSpan) }) { StorageCard() }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp, bottom = 1.dp)) {
-                Text("Quick Access", color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("12 tools", color = Violet, fontSize = 11.sp)
+        item(key = "storage", contentType = "storage") { StorageCard() }
+        item(key = "quick-access", contentType = "section") {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 3.dp)) {
+                Text("Quick Access", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("${visibleFeatures.size} tools", color = Violet, fontSize = 10.sp)
             }
         }
-        items(visibleFeatures, key = { it.title }) { feature -> FeatureCard(feature, onClick = { onFeature(feature) }) }
+        items(visibleFeatures.chunked(2), key = { it.first().title }, contentType = { "feature-row" }) { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FeatureCard(row[0], Modifier.weight(1f)) { onFeature(row[0]) }
+                if (row.size > 1) FeatureCard(row[1], Modifier.weight(1f)) { onFeature(row[1]) }
+                else Spacer(Modifier.weight(1f))
+            }
+        }
     }
 }
-
 @Composable
 private fun StorageCard() {
     var refresh by remember { mutableIntStateOf(0) }
@@ -301,34 +308,27 @@ private fun StorageCard() {
     }
 }
 @Composable
-private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
+private fun FeatureCard(feature: Feature, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().height(112.dp)
-            .clickable { onClick() },
-        shape = RoundedCornerShape(20.dp),
+        modifier = modifier.height(104.dp).clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
         elevation = CardDefaults.cardElevation(0.dp)
     ) {
-        Row(
-            Modifier.fillMaxSize().padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 11.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(42.dp).clip(RoundedCornerShape(14.dp))
-                    .background(feature.tint.copy(alpha = 0.15f))
-                    .border(1.dp, feature.tint.copy(alpha = 0.25f), RoundedCornerShape(14.dp)),
+                Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(feature.tint.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
-            ) { Icon(feature.icon, contentDescription = null, tint = feature.tint) }
-            Spacer(Modifier.width(10.dp))
+            ) { Icon(feature.icon, null, tint = feature.tint, modifier = Modifier.size(20.dp)) }
+            Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(feature.title, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text(feature.subtitle, color = TextMuted, fontSize = 9.sp, lineHeight = 12.sp)
+                Text(feature.title, color = TextMain, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Spacer(Modifier.height(3.dp))
+                Text(feature.subtitle, color = TextMuted, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 2)
             }
         }
     }
 }
-
 
 @Composable
 private fun FileBrowserScreen(
@@ -515,7 +515,7 @@ private fun FeatureList(title: String, subtitle: String, list: List<Feature>, on
         Spacer(Modifier.height(18.dp))
         LazyColumn(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 22.dp)) {
             items(list, key = { it.title }) { feature ->
-                Box(Modifier.fillMaxWidth().widthIn(max = 500.dp), contentAlignment = Alignment.Center) { FeatureCard(feature) { onFeature(feature) } }
+                Box(Modifier.fillMaxWidth().widthIn(max = 500.dp), contentAlignment = Alignment.Center) { FeatureCard(feature, Modifier.fillMaxWidth()) { onFeature(feature) } }
             }
         }
     }
@@ -805,29 +805,107 @@ private fun BuiltInMediaViewer(file: File, onDismiss: () -> Unit) {
                     Text(file.name, color = Color.White, maxLines = 1)
                 }
             } else {
-                var bitmap by remember(file.absolutePath) { mutableStateOf<Bitmap?>(null) }
-                var failed by remember { mutableStateOf(false) }
+                val imageExtensions = remember { setOf("jpg","jpeg","png","webp","gif","bmp","heic","avif") }
+                var gallery by remember(file.absolutePath) { mutableStateOf(listOf(file)) }
+                var page by remember(file.absolutePath) { mutableIntStateOf(0) }
+                val currentImage = gallery.getOrElse(page) { file }
+                var bitmap by remember(currentImage.absolutePath) { mutableStateOf<Bitmap?>(null) }
+                var failed by remember(currentImage.absolutePath) { mutableStateOf(false) }
+                var scale by remember(currentImage.absolutePath) { mutableFloatStateOf(1f) }
+                var offsetX by remember(currentImage.absolutePath) { mutableFloatStateOf(0f) }
+                var offsetY by remember(currentImage.absolutePath) { mutableFloatStateOf(0f) }
                 LaunchedEffect(file.absolutePath) {
+                    gallery = withContext(Dispatchers.IO) {
+                        runCatching {
+                            file.parentFile?.listFiles()?.filter { it.isFile && it.extension.lowercase() in imageExtensions }
+                                ?.sortedBy { it.name.lowercase() }?.take(500)?.takeIf { it.isNotEmpty() } ?: listOf(file)
+                        }.getOrDefault(listOf(file))
+                    }
+                    page = gallery.indexOfFirst { it.absolutePath == file.absolutePath }.coerceAtLeast(0)
+                }
+                LaunchedEffect(currentImage.absolutePath) {
+                    bitmap = null
+                    failed = false
+                    val imageUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", currentImage)
                     bitmap = withContext(Dispatchers.IO) {
                         runCatching {
                             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                            val maxWidth = context.resources.displayMetrics.widthPixels.coerceAtLeast(1)
+                            context.contentResolver.openInputStream(imageUri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                            val maxPixels = (context.resources.displayMetrics.widthPixels * context.resources.displayMetrics.heightPixels * 2).coerceAtLeast(1)
                             var sample = 1
-                            while (bounds.outWidth / sample > maxWidth * 2) sample *= 2
-                            val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.RGB_565 }
-                            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                            while ((bounds.outWidth / sample).toLong() * (bounds.outHeight / sample).toLong() > maxPixels) sample *= 2
+                            val opts = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.RGB_565 }
+                            context.contentResolver.openInputStream(imageUri)?.use { BitmapFactory.decodeStream(it, null, opts) }
                         }.getOrNull()
                     }
                     failed = bitmap == null
+                    scale = 1f; offsetX = 0f; offsetY = 0f
                 }
-                if (bitmap != null) AndroidView(modifier = Modifier.fillMaxSize(), factory = { ImageView(it).apply { scaleType = ImageView.ScaleType.FIT_CENTER } }, update = { it.setImageBitmap(bitmap) })
-                else if (failed) Text("Unable to display image", color = Color.White, modifier = Modifier.align(Alignment.Center))
+                if (bitmap != null) {
+                    Box(
+                        Modifier.fillMaxSize()
+                            .pointerInput(currentImage.absolutePath, scale) {
+                                androidx.compose.foundation.gestures.detectTransformGestures { centroid, zoom, pan, _ ->
+                                    val next = (scale * zoom).coerceIn(1f, 5f)
+                                    scale = next
+                                    if (next > 1f) {
+                                        offsetX += pan.x
+                                        offsetY += pan.y
+                                    } else {
+                                        offsetX = 0f; offsetY = 0f
+                                    }
+                                }
+                            }
+                            .pointerInput(currentImage.absolutePath, scale, page, gallery.size) {
+                                detectTapGestures(
+                                    onDoubleTap = {
+                                        if (scale > 1.05f) { scale = 1f; offsetX = 0f; offsetY = 0f }
+                                        else scale = 2.5f
+                                    }
+                                )
+                            }
+                            .pointerInput(currentImage.absolutePath, scale, page, gallery.size) {
+                                if (scale <= 1.05f) {
+                                    var drag = 0f
+                                    androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                                        onDragEnd = {
+                                            if (drag < -70f && page < gallery.lastIndex) page++
+                                            else if (drag > 70f && page > 0) page--
+                                            drag = 0f
+                                        },
+                                        onHorizontalDrag = { change, amount -> drag += amount; change.consume() }
+                                    )
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.foundation.Image(
+                            bitmap = bitmap!!.asImageBitmap(),
+                            contentDescription = currentImage.name,
+                            modifier = Modifier.fillMaxSize().graphicsLayer {
+                                scaleX = scale; scaleY = scale
+                                translationX = offsetX; translationY = offsetY
+                            },
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                        )
+                    }
+                } else if (failed) Text("Unable to display image", color = Color.White, modifier = Modifier.align(Alignment.Center))
                 else CircularProgressIndicator(color = Blue, modifier = Modifier.align(Alignment.Center))
                 Row(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x99000000)).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
-                    Text(file.name, color = Color.White, maxLines = 1)
+                    Text(currentImage.name, color = Color.White, maxLines = 1, modifier = Modifier.weight(1f))
+                    Text("${page + 1}/${gallery.size}", color = TextMuted, fontSize = 11.sp)
                 }
+                if (gallery.size > 1) {
+                    Row(Modifier.align(Alignment.CenterStart).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { if (page > 0) page-- }, enabled = page > 0) { Icon(Icons.Default.ChevronLeft, "Previous image", tint = Color.White) }
+                    }
+                    Row(Modifier.align(Alignment.CenterEnd).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { if (page < gallery.lastIndex) page++ }, enabled = page < gallery.lastIndex) { Icon(Icons.Default.ChevronRight, "Next image", tint = Color.White) }
+                    }
+                }
+                Text(if (scale > 1.05f) "Zoom ${(scale * 100).toInt()}% • Pinch to zoom • Drag to move" else "Swipe / tap arrows for next photo • Double tap or pinch to zoom",
+                    color = TextMuted, fontSize = 10.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp).background(Color(0x99000000), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp, vertical = 7.dp))
             }
         }
     }
