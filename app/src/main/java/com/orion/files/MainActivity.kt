@@ -282,7 +282,7 @@ private fun StorageCard() {
                 IconButton(onClick = { refresh++ }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Refresh, "Refresh storage", tint = Violet) }
             }
             if (!loaded) {
-                LinearProgressIndicator(Modifier.fillMaxWidth(), color = Blue, trackColor = Color(0xFF252B3B))
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Blue, trackColor = Color(0xFF252B3B))
                 Text("Reading device storage…", color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
             } else {
                 Text("${android.text.format.Formatter.formatShortFileSize(context, used)} used", color = TextMain, fontSize = 27.sp, fontWeight = FontWeight.Bold)
