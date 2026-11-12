@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,9 +59,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import androidx.core.content.FileProvider
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.widget.ImageView
+import android.widget.VideoView
+import android.widget.MediaController
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 private val Black = Color(0xFF030407)
-private val SurfaceGlass = Color(0xB8171B2B)
+private val SurfaceGlass = Color(0xFF111827)
 private val Blue = Color(0xFF4D8DFF)
 private val Violet = Color(0xFF9B6BFF)
 private val TextMain = Color(0xFFF4F5FF)
@@ -122,6 +131,7 @@ private fun OrionRoot() {
     var query by remember { mutableStateOf("") }
     var selectedFolderUri by remember { mutableStateOf<Uri?>(null) }
     var hasAllFilesAccess by remember { mutableStateOf(Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()) }
+    var openedMedia by remember { mutableStateOf<File?>(null) }
     val allFilesSettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         hasAllFilesAccess = Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
     }
@@ -134,6 +144,7 @@ private fun OrionRoot() {
         }
     }
 
+    Box(Modifier.fillMaxSize().background(Black)) {
     Scaffold(
         containerColor = Black,
         bottomBar = {
@@ -168,7 +179,7 @@ private fun OrionRoot() {
     ) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding)
-                .background(Brush.verticalGradient(listOf(Color(0xFF080D1A), Black, Black)))
+                .background(Black)
         ) {
             AnimatedContent(
                 targetState = Triple(tab, selectedFeature, searchOpen),
@@ -194,12 +205,14 @@ private fun OrionRoot() {
                                 allFilesSettings.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                             }
                         }
-                    }, onPickFolder = { folderPicker.launch(null) })
+                    }, onPickFolder = { folderPicker.launch(null) }, onOpenMedia = { openedMedia = it })
                     state.first == 2 -> FeatureList("Smart Tools", "Useful tools in one place", features.drop(4), onFeature = { selectedFeature = it })
                     else -> SettingsScreen()
                 }
             }
         }
+    }
+    openedMedia?.let { file -> BuiltInMediaViewer(file, onDismiss = { openedMedia = null }) }
     }
 }
 
@@ -211,56 +224,39 @@ private fun HomeScreen(
     onQuery: (String) -> Unit,
     onFeature: (Feature) -> Unit
 ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(18.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("ORION", color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
-                Text("FILES  •  ALL YOUR FILES. ONE PLACE.", color = TextMuted, fontSize = 9.sp, letterSpacing = 1.sp)
-            }
-            IconButton(onClick = onSearch) {
-                Icon(Icons.Default.Search, contentDescription = "Search", tint = TextMain)
-            }
-            Box(
-                Modifier.size(42.dp).clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(Blue, Violet))),
-                contentAlignment = Alignment.Center
-            ) { Icon(Icons.Default.Bolt, contentDescription = null, tint = Color.White) }
-        }
-        AnimatedVisibility(searchOpen, enter = fadeIn() + androidx.compose.animation.expandVertically(), exit = fadeOut() + androidx.compose.animation.shrinkVertically()) {
-            OutlinedTextField(
-                value = query, onValueChange = onQuery,
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                placeholder = { Text("Search files and tools…", color = TextMuted) },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Blue,
-                    unfocusedBorderColor = BorderGlow,
-                    focusedTextColor = TextMain,
-                    unfocusedTextColor = TextMain
-                )
-            )
-        }
-        Spacer(Modifier.height(20.dp))
-        StorageCard()
-        Spacer(Modifier.height(22.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Quick Access", color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text("12 tools", color = Violet, fontSize = 11.sp)
-        }
-        Spacer(Modifier.height(12.dp))
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(11.dp),
-            horizontalArrangement = Arrangement.spacedBy(11.dp),
-            contentPadding = PaddingValues(bottom = 18.dp)
-        ) {
-            items(features.filter { it.title.contains(query, true) || query.isBlank() }) { feature ->
-                FeatureCard(feature, onClick = { onFeature(feature) })
+    val visibleFeatures = remember(query) { features.filter { it.title.contains(query, true) || query.isBlank() } }
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("ORION", color = TextMain, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
+                    Text("FILES  •  ALL YOUR FILES. ONE PLACE.", color = TextMuted, fontSize = 9.sp, letterSpacing = 1.sp)
+                }
+                IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Search", tint = TextMain) }
+                Box(Modifier.size(40.dp).clip(CircleShape).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Bolt, contentDescription = null, tint = Color.White)
+                }
             }
         }
+        if (searchOpen) item(span = { GridItemSpan(maxLineSpan) }) {
+            OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search files and tools…", color = TextMuted) }, singleLine = true,
+                shape = RoundedCornerShape(14.dp), colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Blue, unfocusedBorderColor = BorderGlow,
+                    focusedTextColor = TextMain, unfocusedTextColor = TextMain))
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) { StorageCard() }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp, bottom = 1.dp)) {
+                Text("Quick Access", color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("12 tools", color = Violet, fontSize = 11.sp)
+            }
+        }
+        items(visibleFeatures, key = { it.title }) { feature -> FeatureCard(feature, onClick = { onFeature(feature) }) }
     }
 }
 
@@ -307,7 +303,6 @@ private fun StorageCard() {
 private fun FeatureCard(feature: Feature, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().height(112.dp)
-            .animateContentSize(animationSpec = tween(160))
             .clickable { onClick() },
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceGlass),
@@ -339,7 +334,8 @@ private fun FileBrowserScreen(
     hasAllFilesAccess: Boolean,
     rootUri: Uri?,
     onRequestAllFiles: () -> Unit,
-    onPickFolder: () -> Unit
+    onPickFolder: () -> Unit,
+    onOpenMedia: (File) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -443,13 +439,13 @@ private fun FileBrowserScreen(
                 items(entries, key = { it.absolutePath }) { file ->
                     Card(colors = CardDefaults.cardColors(containerColor = SurfaceGlass), shape = RoundedCornerShape(14.dp)) {
                         Row(Modifier.fillMaxWidth().clickable {
-                            if (file.isDirectory) currentFolder = file else {
-                                runCatching {
-                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                                    val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
-                                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                                }.onFailure { android.widget.Toast.makeText(context, "No app found to open this file", android.widget.Toast.LENGTH_SHORT).show() }
-                            }
+                            if (file.isDirectory) currentFolder = file
+                            else if (file.extension.lowercase() in listOf("jpg","jpeg","png","webp","gif","bmp","heic","avif","mp4","mkv","webm","3gp","mov")) onOpenMedia(file)
+                            else runCatching {
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+                                context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                            }.onFailure { android.widget.Toast.makeText(context, "No compatible app found", android.widget.Toast.LENGTH_SHORT).show() }
                         }.padding(start = 13.dp, end = 5.dp, top = 11.dp, bottom = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, contentDescription = null, tint = if (file.isDirectory) Blue else Violet)
                             Spacer(Modifier.width(11.dp))
@@ -531,6 +527,52 @@ private fun FeatureDetail(feature: Feature) {
         Spacer(Modifier.height(18.dp))
         Surface(color = Color(0x332F70E8), shape = RoundedCornerShape(50.dp)) {
             Text("COMING IN FEATURE RELEASE", color = Blue, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
+        }
+    }
+}
+
+@Composable
+private fun BuiltInMediaViewer(file: File, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val isVideo = file.extension.lowercase() in listOf("mp4","mkv","webm","3gp","mov")
+    val uri = remember(file.absolutePath) { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file) }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (isVideo) {
+                AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
+                    VideoView(ctx).apply {
+                        val controls = MediaController(ctx)
+                        controls.setAnchorView(this)
+                        setMediaController(controls)
+                        setVideoURI(uri)
+                        setOnPreparedListener { it.isLooping = false; start() }
+                    }
+                })
+            } else {
+                var bitmap by remember(file.absolutePath) { mutableStateOf<Bitmap?>(null) }
+                var failed by remember { mutableStateOf(false) }
+                LaunchedEffect(file.absolutePath) {
+                    bitmap = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                            val maxWidth = context.resources.displayMetrics.widthPixels.coerceAtLeast(1)
+                            var sample = 1
+                            while (bounds.outWidth / sample > maxWidth * 2) sample *= 2
+                            val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.RGB_565 }
+                            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                        }.getOrNull()
+                    }
+                    failed = bitmap == null
+                }
+                if (bitmap != null) AndroidView(modifier = Modifier.fillMaxSize(), factory = { ImageView(it).apply { scaleType = ImageView.ScaleType.FIT_CENTER } }, update = { it.setImageBitmap(bitmap) })
+                else if (failed) Text("Unable to display image", color = Color.White, modifier = Modifier.align(Alignment.Center))
+                else CircularProgressIndicator(color = Blue, modifier = Modifier.align(Alignment.Center))
+            }
+            Row(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x99000000)).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White) }
+                Text(file.name, color = Color.White, maxLines = 1)
+            }
         }
     }
 }
