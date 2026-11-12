@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import androidx.core.content.FileProvider
 
 private val Black = Color(0xFF030407)
@@ -341,6 +342,7 @@ private fun FileBrowserScreen(
     onPickFolder: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var currentFolder by remember(hasAllFilesAccess, rootUri) {
         mutableStateOf<File?>(if (hasAllFilesAccess) Environment.getExternalStorageDirectory() else null)
     }
@@ -403,7 +405,7 @@ private fun FileBrowserScreen(
                         val target = source?.let { File(currentFolder, it.name) }
                         if (source != null && target != null) {
                             loading = true
-                            kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                            scope.launch(Dispatchers.IO) {
                                 runCatching { source.copyRecursively(target, overwrite = true); if (cutMode) source.deleteRecursively() }
                                 withContext(Dispatchers.Main) { clipboardFile = null; cutMode = false; refreshKey++ }
                             }
