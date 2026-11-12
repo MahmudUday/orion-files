@@ -1,6 +1,8 @@
 package com.orion.files
 
 import android.os.Bundle
+import android.app.Activity
+import android.media.AudioManager
 import android.os.StatFs
 import android.os.Environment
 import android.provider.Settings
@@ -28,6 +30,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -50,6 +55,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.core.content.FileProvider
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -69,6 +76,7 @@ import android.widget.VideoView
 import android.widget.MediaController
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 
 private val Black = Color(0xFF030407)
 private val SurfaceGlass = Color(0xFF111827)
@@ -670,15 +678,132 @@ private fun BuiltInMediaViewer(file: File, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             if (isVideo) {
-                AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
-                    VideoView(ctx).apply {
-                        val controls = MediaController(ctx)
-                        controls.setAnchorView(this)
-                        setMediaController(controls)
-                        setVideoURI(uri)
-                        setOnPreparedListener { it.isLooping = false; start() }
+                var player by remember(file.absolutePath) { mutableStateOf<VideoView?>(null) }
+                var playing by remember { mutableStateOf(true) }
+                var controlsVisible by remember { mutableStateOf(true) }
+                var duration by remember { mutableIntStateOf(0) }
+                var position by remember { mutableIntStateOf(0) }
+                var seeking by remember { mutableStateOf(false) }
+                var seekPreview by remember { mutableFloatStateOf(0f) }
+                var brightness by remember { mutableFloatStateOf(0.55f) }
+                var volume by remember { mutableFloatStateOf(0.5f) }
+                val audio = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager }
+                val maxVolume = remember { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
+                val view = LocalView.current
+                val dialogWindow = (view.parent as? DialogWindowProvider)?.window
+                LaunchedEffect(player) {
+                    while (player != null) {
+                        val current = player
+                        if (current != null && !seeking) {
+                            position = current.currentPosition.coerceAtLeast(0)
+                            duration = current.duration.coerceAtLeast(0)
+                            playing = current.isPlaying
+                        }
+                        delay(400)
                     }
-                })
+                }
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        VideoView(ctx).also { video ->
+                            player = video
+                            video.setVideoURI(uri)
+                            video.setOnPreparedListener { media ->
+                                duration = media.duration.coerceAtLeast(0)
+                                video.start()
+                                playing = true
+                            }
+                            video.setOnCompletionListener { playing = false }
+                        }
+                    },
+                    update = { if (player !== it) player = it }
+                )
+                Box(
+                    Modifier.fillMaxSize()
+                        .pointerInput(player) {
+                            detectTapGestures(
+                                onTap = { controlsVisible = !controlsVisible },
+                                onDoubleTap = { point ->
+                                    val jump = if (point.x < size.width / 2f) -10000 else 10000
+                                    val target = ((player?.currentPosition ?: 0) + jump).coerceIn(0, duration.coerceAtLeast(0))
+                                    player?.seekTo(target)
+                                    position = target
+                                    controlsVisible = true
+                                }
+                            )
+                        }
+                        .pointerInput(player, brightness, volume) {
+                            detectVerticalDragGestures { change, dragAmount ->
+                                if (change.position.x < context.resources.displayMetrics.widthPixels / 2f) {
+                                    brightness = (brightness - dragAmount / 900f).coerceIn(0.05f, 1f)
+                                    dialogWindow?.let { win -> win.attributes = win.attributes.apply { screenBrightness = brightness } }
+                                } else {
+                                    val current = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                    val next = (current - (dragAmount / 45f).toInt()).coerceIn(0, maxVolume)
+                                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0)
+                                    volume = next.toFloat() / maxVolume
+                                }
+                                change.consume()
+                                controlsVisible = true
+                            }
+                        }
+                ) {
+                    if (controlsVisible) {
+                        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xD9080B12)).padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+                                IconButton(onClick = {
+                                    brightness = (brightness - 0.1f).coerceAtLeast(0.05f)
+                                    dialogWindow?.let { win -> win.attributes = win.attributes.apply { screenBrightness = brightness } }
+                                }) { Icon(Icons.Default.BrightnessLow, null, tint = Color.White) }
+                                Text("Brightness ${(brightness * 100).toInt()}%", color = TextMuted, fontSize = 10.sp)
+                                IconButton(onClick = {
+                                    val next = (audio.getStreamVolume(AudioManager.STREAM_MUSIC) - 1).coerceAtLeast(0)
+                                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0); volume = next.toFloat() / maxVolume
+                                }) { Icon(Icons.Default.VolumeDown, null, tint = Color.White) }
+                                Text("Volume ${(volume * 100).toInt()}%", color = TextMuted, fontSize = 10.sp)
+                                IconButton(onClick = {
+                                    val next = (audio.getStreamVolume(AudioManager.STREAM_MUSIC) + 1).coerceAtMost(maxVolume)
+                                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0); volume = next.toFloat() / maxVolume
+                                }) { Icon(Icons.Default.VolumeUp, null, tint = Color.White) }
+                            }
+                            Slider(
+                                value = if (seeking) seekPreview else if (duration > 0) position.toFloat() / duration else 0f,
+                                onValueChange = { seeking = true; seekPreview = it },
+                                onValueChangeFinished = {
+                                    val target = (seekPreview * duration).toInt().coerceIn(0, duration)
+                                    player?.seekTo(target); position = target; seeking = false
+                                },
+                                colors = SliderDefaults.colors(thumbColor = Blue, activeTrackColor = Blue, inactiveTrackColor = TextMuted)
+                            )
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(String.format("%02d:%02d", position / 60000, (position / 1000) % 60), color = Color.White, fontSize = 11.sp)
+                                Spacer(Modifier.weight(1f))
+                                Text(String.format("%02d:%02d", duration / 60000, (duration / 1000) % 60), color = TextMuted, fontSize = 11.sp)
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { val p = ((player?.currentPosition ?: 0) - 10000).coerceAtLeast(0); player?.seekTo(p); position = p }) {
+                                    Icon(Icons.Default.Replay10, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                                }
+                                Spacer(Modifier.width(24.dp))
+                                IconButton(onClick = {
+                                    val v = player ?: return@IconButton
+                                    if (v.isPlaying) { v.pause(); playing = false } else { v.start(); playing = true }
+                                }, modifier = Modifier.size(54.dp)) {
+                                    Icon(if (playing) Icons.Default.PauseCircleFilled else Icons.Default.PlayCircleFilled, null, tint = Blue, modifier = Modifier.size(48.dp))
+                                }
+                                Spacer(Modifier.width(24.dp))
+                                IconButton(onClick = { val p = ((player?.currentPosition ?: 0) + 10000).coerceAtMost(duration); player?.seekTo(p); position = p }) {
+                                    Icon(Icons.Default.Forward10, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                                }
+                            }
+                            Text("Double tap left/right: −10s / +10s  •  Swipe left/right side: brightness / volume", color = TextMuted, fontSize = 9.sp)
+                        }
+                    }
+                }
+                Row(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x99000000)).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
+                    Text(file.name, color = Color.White, maxLines = 1)
+                }
             } else {
                 var bitmap by remember(file.absolutePath) { mutableStateOf<Bitmap?>(null) }
                 var failed by remember { mutableStateOf(false) }
@@ -699,15 +824,14 @@ private fun BuiltInMediaViewer(file: File, onDismiss: () -> Unit) {
                 if (bitmap != null) AndroidView(modifier = Modifier.fillMaxSize(), factory = { ImageView(it).apply { scaleType = ImageView.ScaleType.FIT_CENTER } }, update = { it.setImageBitmap(bitmap) })
                 else if (failed) Text("Unable to display image", color = Color.White, modifier = Modifier.align(Alignment.Center))
                 else CircularProgressIndicator(color = Blue, modifier = Modifier.align(Alignment.Center))
-            }
-            Row(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x99000000)).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White) }
-                Text(file.name, color = Color.White, maxLines = 1)
+                Row(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x99000000)).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
+                    Text(file.name, color = Color.White, maxLines = 1)
+                }
             }
         }
     }
 }
-
 @Composable
 private fun SettingsScreen() {
     Column(Modifier.fillMaxSize().padding(20.dp)) {
